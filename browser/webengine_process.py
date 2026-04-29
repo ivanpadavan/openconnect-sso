@@ -110,7 +110,10 @@ class Process(multiprocessing.Process):
         web.authenticate_at(QUrl(startup_info.url), startup_info.credentials)
 
         web.show()
-        rc = app.exec()
+        try:
+            rc = app.exec()
+        finally:
+            web.close()
 
         logger.info("Exiting browser")
         return rc
@@ -214,18 +217,29 @@ autoFill();
 
     def _on_sms_code(self, code):
         self._sms_code = code
-        self._fill_sms_code()
+        logger.info("SMS code received in browser")
+        self._set_sms_code()
 
     def _on_sms_error(self, message):
         logger.error("SMS autofill error", message=message)
 
-    def _fill_sms_code(self):
+    def close(self):
+        if self._sms_watcher:
+            self._sms_watcher.stop()
+            self._sms_watcher = None
+        super().close()
+
+    def _set_sms_code(self):
         if not self._sms_code:
             return
-        selectors = get_sms_selectors(self._auto_fill_rules)
-        if not selectors:
-            return
-        self.page().runJavaScript(make_sms_fill_script(selectors, self._sms_code))
+        logger.debug(
+            "Setting SMS code for autofill",
+            url=self.page().url().toString(),
+        )
+        self.page().runJavaScript(
+            make_sms_value_script(self._sms_code),
+            QWebEngineScript.ScriptWorldId.ApplicationWorld,
+        )
 
     def _on_cookie_added(self, cookie):
         logger.debug("Cookie set", name=to_str(cookie.name()))
@@ -234,7 +248,7 @@ autoFill();
     def _on_load_finished(self, success):
         url = self.page().url().toString()
         logger.debug("Page loaded", url=url)
-        self._fill_sms_code()
+        self._set_sms_code()
 
         self._on_update(Url(url))
 
@@ -285,7 +299,7 @@ def get_selectors(rules, credentials):
         elif rule.fill:
             if rule.fill == "sms":
                 statements.append(
-                    f"""var elem = document.querySelector({selector}); if (elem && !elem.value) {{ return; }}"""
+                    f"""var elem = document.querySelector({selector}); var value = window.__openconnect_sso_sms; if (elem && value) {{ elem.dispatchEvent(new Event("focus")); elem.value = value; elem.dispatchEvent(new Event("input")); elem.dispatchEvent(new Event("change")); elem.dispatchEvent(new Event("blur")); }}"""
                 )
                 continue
             value = json.dumps(getattr(credentials, rule.fill, None))
@@ -315,23 +329,10 @@ def get_sms_selectors(auto_fill_rules):
     ]
 
 
-def make_sms_fill_script(selectors, code):
-    selectors_json = json.dumps(selectors)
+def make_sms_value_script(code):
     code_json = json.dumps(code)
     return f"""
 (function() {{
-    var selectors = {selectors_json};
-    var code = {code_json};
-    for (var i = 0; i < selectors.length; i++) {{
-        var elem = document.querySelector(selectors[i]);
-        if (!elem) {{
-            continue;
-        }}
-        elem.dispatchEvent(new Event("focus"));
-        elem.value = code;
-        elem.dispatchEvent(new Event("input"));
-        elem.dispatchEvent(new Event("change"));
-        elem.dispatchEvent(new Event("blur"));
-    }}
+    window.__openconnect_sso_sms = {code_json};
 }})();
 """

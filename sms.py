@@ -8,12 +8,6 @@ import structlog
 logger = structlog.get_logger("sms")
 
 
-FULL_DISK_ACCESS_HINT = (
-    "imsg needs Full Disk Access to read Messages. On macOS, grant Full Disk "
-    "Access to the terminal app that launches openconnect-sso, then retry."
-)
-
-
 class SmsCodeWatcher:
     def __init__(self, sms_config):
         sms_config.validate()
@@ -22,6 +16,7 @@ class SmsCodeWatcher:
         self._stopped = threading.Event()
         self._threads = []
         self._timer = None
+        self._last_output = None
 
     def start(self, on_code, on_error=None):
         command = [
@@ -41,7 +36,7 @@ class SmsCodeWatcher:
                 bufsize=1,
             )
         except OSError as exc:
-            message = f"Cannot start imsg: {exc}. {FULL_DISK_ACCESS_HINT}"
+            message = f"Cannot start imsg: {exc}"
             logger.error(message)
             if on_error:
                 on_error(message)
@@ -93,17 +88,26 @@ class SmsCodeWatcher:
             try:
                 code = extract_code(line, self.config)
             except ValueError as exc:
-                logger.warning("Ignoring invalid imsg output", error=str(exc))
+                message = line.strip()
+                self._record_output(message)
+                logger.warning(
+                    "Ignoring non-JSON imsg stdout",
+                    message=message,
+                    error=str(exc),
+                )
                 continue
             if code:
                 logger.info("SMS code received")
                 on_code(code)
                 self.stop()
                 return
+            logger.debug("Ignoring imsg JSON message without matching SMS code")
 
         if not self._stopped.is_set():
             rc = self._process.poll()
-            message = f"imsg watch exited before receiving an SMS code (rc={rc}). {FULL_DISK_ACCESS_HINT}"
+            message = f"imsg watch exited before receiving an SMS code (rc={rc})"
+            if self._last_output:
+                message += f"; last output: {self._last_output}"
             logger.error(message)
             if on_error:
                 on_error(message)
@@ -114,9 +118,11 @@ class SmsCodeWatcher:
             message = line.strip()
             if not message:
                 continue
+            self._record_output(message)
             logger.warning("imsg stderr", message=message)
-            if _looks_like_privacy_error(message) and on_error:
-                on_error(f"{message}. {FULL_DISK_ACCESS_HINT}")
+
+    def _record_output(self, message):
+        self._last_output = message[:500]
 
 
 def extract_code(line, sms_config):
@@ -126,25 +132,12 @@ def extract_code(line, sms_config):
         raise ValueError(exc) from exc
 
     if message.get("is_from_me"):
-        return None
-    if sms_config.require_service and message.get("service") != sms_config.require_service:
+        logger.debug("Ignoring outgoing imsg message")
         return None
 
     text = message.get("text") or ""
     match = re.search(sms_config.regex, text)
     if not match:
+        logger.debug("Ignoring imsg message that does not match regex", text=text)
         return None
     return match.group(1) if match.groups() else match.group(0)
-
-
-def _looks_like_privacy_error(message):
-    lowered = message.lower()
-    return any(
-        needle in lowered
-        for needle in (
-            "operation not permitted",
-            "permission",
-            "not authorized",
-            "full disk",
-        )
-    )

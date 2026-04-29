@@ -89,7 +89,6 @@ class SmsConfig(ConfigNode):
     chat_id = attr.ib(default=None)
     regex = attr.ib(default=None)
     timeout_seconds = attr.ib(converter=int, default=120)
-    require_service = attr.ib(converter=str, default="SMS")
 
     def validate(self):
         missing = []
