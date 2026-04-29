@@ -240,7 +240,7 @@ def get_selectors(rules, credentials):
             value = json.dumps(getattr(credentials, rule.fill, None))
             if value:
                 statements.append(
-                    f"""var elem = document.querySelector({selector}); if (elem) {{ elem.dispatchEvent(new Event("focus")); elem.value = {value}; elem.dispatchEvent(new Event("blur")); }}"""
+                    f"""var elem = document.querySelector({selector}); if (elem) {{ elem.dispatchEvent(new Event("focus")); elem.value = {value}; elem.dispatchEvent(new Event("blur")); elem.dispatchEvent(new Event("input")); }}"""
                 )
             else:
                 logger.warning(
