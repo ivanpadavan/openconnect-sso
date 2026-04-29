@@ -108,6 +108,17 @@ def configure_logger(logger, level):
 
 
 async def _run(args, cfg):
+    if cfg.uses_sms_fill:
+        if not cfg.sms:
+            raise ValueError(
+                'fill = "sms" requires an [sms] config section with chat_id and regex',
+                21,
+            )
+        try:
+            cfg.sms.validate()
+        except ValueError as exc:
+            raise ValueError(str(exc), 21)
+
     credentials = None
     if cfg.credentials:
         credentials = cfg.credentials
@@ -118,7 +129,7 @@ async def _run(args, cfg):
         credentials.password = getpass.getpass(prompt=f"Password ({args.user}): ")
         cfg.credentials = credentials
 
-    if credentials and not credentials.totp:
+    if credentials and cfg.uses_fill("totp") and not credentials.totp:
         credentials.totp = getpass.getpass(
             prompt=f"TOTP secret (leave blank if not required) ({args.user}): "
         )

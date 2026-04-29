@@ -9,13 +9,14 @@ import attr
 import pkg_resources
 import structlog
 
-from PyQt6.QtCore import QUrl, QTimer, pyqtSlot, Qt
+from PyQt6.QtCore import QObject, QUrl, QTimer, pyqtSignal, pyqtSlot, Qt
 from PyQt6.QtNetwork import QNetworkCookie, QNetworkProxy
 from PyQt6.QtWebEngineCore import QWebEngineScript, QWebEngineProfile, QWebEnginePage
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWidgets import QApplication, QWidget, QSizePolicy, QVBoxLayout
 
 from openconnect_sso import config
+from openconnect_sso.sms import SmsCodeWatcher
 
 
 app = None
@@ -99,7 +100,7 @@ class Process(multiprocessing.Process):
             pass
 
         force_python_execution.timeout.connect(ignore)
-        web = WebBrowser(cfg.auto_fill_rules, self._states.put)
+        web = WebBrowser(cfg.auto_fill_rules, cfg.sms, self._states.put)
 
         startup_info = self._commands.get()
         logger.info("Browser started", startup_info=startup_info)
@@ -137,11 +138,22 @@ def on_sigterm(signum, frame):
     exit_timer.start(1000)  # ms
 
 
+class SmsBridge(QObject):
+    code_received = pyqtSignal(str)
+    error_received = pyqtSignal(str)
+
+
 class WebBrowser(QWebEngineView):
-    def __init__(self, auto_fill_rules, on_update):
+    def __init__(self, auto_fill_rules, sms_config, on_update):
         super().__init__()
         self._on_update = on_update
         self._auto_fill_rules = auto_fill_rules
+        self._sms_config = sms_config
+        self._sms_code = None
+        self._sms_watcher = None
+        self._sms_bridge = SmsBridge()
+        self._sms_bridge.code_received.connect(self._on_sms_code)
+        self._sms_bridge.error_received.connect(self._on_sms_error)
         cookie_store = self.page().profile().cookieStore()
         cookie_store.cookieAdded.connect(self._on_cookie_added)
         self.page().loadFinished.connect(self._on_load_finished)
@@ -152,6 +164,15 @@ class WebBrowser(QWebEngineView):
             return self._popupWindow.view()
 
     def authenticate_at(self, url, credentials):
+        sms_selectors = get_sms_selectors(self._auto_fill_rules)
+        if sms_selectors:
+            if not self._sms_config:
+                raise ValueError(
+                    'fill = "sms" requires an [sms] config section with chat_id and regex'
+                )
+            self._sms_config.validate()
+            self._start_sms_watcher()
+
         script_source = pkg_resources.resource_string(__name__, "user.js").decode()
         script = QWebEngineScript()
         script.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentCreation)
@@ -182,6 +203,30 @@ autoFill();
 
         self.load(QUrl(url))
 
+    def _start_sms_watcher(self):
+        if self._sms_watcher:
+            return
+        self._sms_watcher = SmsCodeWatcher(self._sms_config)
+        self._sms_watcher.start(
+            self._sms_bridge.code_received.emit,
+            self._sms_bridge.error_received.emit,
+        )
+
+    def _on_sms_code(self, code):
+        self._sms_code = code
+        self._fill_sms_code()
+
+    def _on_sms_error(self, message):
+        logger.error("SMS autofill error", message=message)
+
+    def _fill_sms_code(self):
+        if not self._sms_code:
+            return
+        selectors = get_sms_selectors(self._auto_fill_rules)
+        if not selectors:
+            return
+        self.page().runJavaScript(make_sms_fill_script(selectors, self._sms_code))
+
     def _on_cookie_added(self, cookie):
         logger.debug("Cookie set", name=to_str(cookie.name()))
         self._on_update(SetCookie(to_str(cookie.name()), to_str(cookie.value())))
@@ -189,6 +234,7 @@ autoFill();
     def _on_load_finished(self, success):
         url = self.page().url().toString()
         logger.debug("Page loaded", url=url)
+        self._fill_sms_code()
 
         self._on_update(Url(url))
 
@@ -237,6 +283,11 @@ def get_selectors(rules, credentials):
                 f"""var elem = document.querySelector({selector}); if (elem) {{ return; }}"""
             )
         elif rule.fill:
+            if rule.fill == "sms":
+                statements.append(
+                    f"""var elem = document.querySelector({selector}); if (elem && !elem.value) {{ return; }}"""
+                )
+                continue
             value = json.dumps(getattr(credentials, rule.fill, None))
             if value:
                 statements.append(
@@ -253,3 +304,34 @@ def get_selectors(rules, credentials):
                 f"""var elem = document.querySelector({selector}); if (elem) {{ elem.dispatchEvent(new Event("focus")); elem.click(); }}"""
             )
     return "\n".join(statements)
+
+
+def get_sms_selectors(auto_fill_rules):
+    return [
+        rule.selector
+        for rules in auto_fill_rules.values()
+        for rule in rules
+        if rule.fill == "sms"
+    ]
+
+
+def make_sms_fill_script(selectors, code):
+    selectors_json = json.dumps(selectors)
+    code_json = json.dumps(code)
+    return f"""
+(function() {{
+    var selectors = {selectors_json};
+    var code = {code_json};
+    for (var i = 0; i < selectors.length; i++) {{
+        var elem = document.querySelector(selectors[i]);
+        if (!elem) {{
+            continue;
+        }}
+        elem.dispatchEvent(new Event("focus"));
+        elem.value = code;
+        elem.dispatchEvent(new Event("input"));
+        elem.dispatchEvent(new Event("change"));
+        elem.dispatchEvent(new Event("blur"));
+    }}
+}})();
+"""

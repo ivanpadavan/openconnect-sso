@@ -83,6 +83,28 @@ class AutoFillRule(ConfigNode):
     action = attr.ib(default=None)
 
 
+@attr.s
+class SmsConfig(ConfigNode):
+    imsg_path = attr.ib(converter=str, default="/opt/homebrew/bin/imsg")
+    chat_id = attr.ib(default=None)
+    regex = attr.ib(default=None)
+    timeout_seconds = attr.ib(converter=int, default=120)
+    require_service = attr.ib(converter=str, default="SMS")
+
+    def validate(self):
+        missing = []
+        if self.chat_id is None:
+            missing.append("chat_id")
+        if not self.regex:
+            missing.append("regex")
+        if missing:
+            raise ValueError(
+                "fill = \"sms\" requires [sms] settings: "
+                + ", ".join(missing)
+                + ". Example: [sms] chat_id = 123 regex = \"(?<!\\\\d)(\\\\d{6})(?!\\\\d)\""
+            )
+
+
 def get_default_auto_fill_rules():
     return {
         "https://*": [
@@ -149,7 +171,19 @@ class Config(ConfigNode):
             n: [AutoFillRule.from_dict(r) for r in rule] for n, rule in rules.items()
         },
     )
+    sms = attr.ib(default=None, converter=SmsConfig.from_dict)
     on_disconnect = attr.ib(converter=str, default="")
+
+    @property
+    def uses_sms_fill(self):
+        return self.uses_fill("sms")
+
+    def uses_fill(self, name):
+        return any(
+            rule.fill == name
+            for rules in self.auto_fill_rules.values()
+            for rule in rules
+        )
 
 
 class DisplayMode(enum.Enum):
