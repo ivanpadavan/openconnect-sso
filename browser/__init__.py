@@ -1,3 +1,3 @@
-from .browser import Browser, DisplayMode, Terminated
+from .browser import AutoFillLimitExceeded, Browser, DisplayMode, Terminated
 
-__all__ = [Browser, DisplayMode, Terminated]
+__all__ = [AutoFillLimitExceeded, Browser, DisplayMode, Terminated]

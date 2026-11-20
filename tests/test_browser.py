@@ -8,7 +8,12 @@ from PyQt6.QtTest import QTest
 from PyQt6.QtWebEngineCore import QWebEnginePage
 from PyQt6.QtWidgets import QApplication
 
-from openconnect_sso.browser.webengine_process import PageHtml, Url, WebBrowser
+from openconnect_sso.browser.webengine_process import (
+    AutoFillLimitExceeded,
+    PageHtml,
+    Url,
+    WebBrowser,
+)
 from openconnect_sso.config import AutoFillRule, Config, Credentials
 
 
@@ -31,6 +36,7 @@ class BrowserTest(unittest.TestCase):
     def make_browser(self, *, limit, debug_html=False):
         rules = {
             "file://*": [
+                AutoFillRule(selector="#removed", action="click"),
                 AutoFillRule(selector="#username", fill="username"),
                 AutoFillRule(selector="#next", action="click"),
             ]
@@ -62,9 +68,10 @@ class BrowserTest(unittest.TestCase):
             '<button id="next" onclick="location.href=\'stage.html\'">Next</button>',
         )
         popup_body = (
+            '<button id="removed" onfocus="this.remove()">Removed before click</button>'
             '<input id="username" oninput="this.defaultValue = this.value">'
-            '<button id="next" onclick="this.dataset.clicks = '
-            '(Number(this.dataset.clicks) || 0) + 1">Click</button>'
+            '<button id="next" onclick="this.dataset.clicks = 1; this.disabled = true">'
+            "Click</button>"
             f"<p>{'a' * 1024} end of HTML</p>"
         )
         dialog = self.make_page("dialog", popup_body)
@@ -81,16 +88,17 @@ class BrowserTest(unittest.TestCase):
             lambda: self.js(popup, "document.querySelector('#next')?.dataset.clicks") == "1"
         )
 
-        browser.load(after_limit)
-        self.wait_until(lambda: Url(after_limit.toString()) in self.updates)
         QTest.qWait(1200)
+        self.assertNotIn(AutoFillLimitExceeded(3), self.updates)
+        self.assertTrue(self.js(popup, "document.querySelector('#removed') === null"))
         self.assertEqual(self.js(popup, "document.querySelector('#username').value"), "alice")
         self.assertEqual(self.js(popup, "document.querySelector('#next').dataset.clicks"), "1")
+
+        browser.load(after_limit)
+        self.wait_until(lambda: AutoFillLimitExceeded(3) in self.updates)
         self.assertEqual(self.js(browser, "document.querySelector('#username').value"), "")
         self.assertIsNone(self.js(browser, "document.querySelector('#next').dataset.clicks"))
 
-        self.js(browser, "document.querySelector('#next').click()")
-        self.assertEqual(self.js(browser, "document.querySelector('#next').dataset.clicks"), "1")
         pages = {msg.url: msg.html for msg in self.updates if isinstance(msg, PageHtml)}
         self.assertIn("<p>Next stage</p>", pages[stage.toString()])
         self.assertIn("a" * 1024 + " end of HTML</p></body></html>", pages[dialog.toString()])

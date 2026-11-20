@@ -58,6 +58,9 @@ class Browser:
 
             if isinstance(state, web.Url):
                 await self._urls.put(state.url)
+            elif isinstance(state, web.AutoFillLimitExceeded):
+                await self._urls.put(state)
+                return
             elif isinstance(state, web.SetCookie):
                 self.cookies[state.name] = state.value
             else:
@@ -69,6 +72,8 @@ class Browser:
 
     async def page_loaded(self):
         rv = await self._urls.get()
+        if isinstance(rv, web.AutoFillLimitExceeded):
+            raise AutoFillLimitExceeded(rv.limit)
         if not self.running:
             raise Terminated()
         self.url = rv
@@ -90,3 +95,9 @@ class Browser:
 
 class Terminated(Exception):
     pass
+
+
+class AutoFillLimitExceeded(Exception):
+    def __init__(self, limit):
+        super().__init__(limit)
+        self.limit = limit

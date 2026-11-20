@@ -3,51 +3,52 @@
 
     window.__openconnect_sso_register_rules = (rules) => {
         ruleSets.push({rules, stopped: false});
-        if (ruleSets.length === 1) {
-            new QWebChannel(qt.webChannelTransport, ({objects}) => autoFill(objects.budget));
-        }
     };
 
-    async function autoFill(budget) {
-        if (budget.exhausted) {
-            return;
-        }
-
+    window.__openconnect_sso_autofill = (remaining) => {
+        let performed = 0;
         for (const ruleSet of ruleSets) {
             if (ruleSet.stopped) {
                 continue;
             }
-            for (const rule of ruleSet.rules) {
-                const elem = document.querySelector(rule.selector);
-                if (!elem) {
-                    continue;
-                }
-                if (rule.type === "stop") {
-                    ruleSet.stopped = true;
-                    break;
-                }
+            try {
+                for (const rule of ruleSet.rules) {
+                    const elem = document.querySelector(rule.selector);
+                    if (!elem) {
+                        continue;
+                    }
+                    if (rule.type === "stop") {
+                        ruleSet.stopped = true;
+                        break;
+                    }
 
-                const click = rule.type === "click";
-                const sms = rule.type === "sms";
-                const value = sms ? window.__openconnect_sso_sms : rule.value;
-                if (click ? elem.matches(":disabled") : !value || elem.value === value) {
-                    continue;
-                }
+                    const click = rule.type === "click";
+                    const sms = rule.type === "sms";
+                    const value = sms ? window.__openconnect_sso_sms : rule.value;
+                    if (click ? elem.matches(":disabled") : !value || elem.value === value) {
+                        continue;
+                    }
+                    if (performed === remaining) {
+                        return {performed, overflow: true};
+                    }
 
-                // Wait for Qt to reserve an action before changing the page.
-                // Every document uses the same budget, including popup documents.
-                const allowed = await new Promise((resolve) => budget.reserve(resolve));
-                if (!allowed) {
-                    return;
-                }
-                if (!elem.isConnected) {
-                    continue;
-                }
-                elem.dispatchEvent(new Event("focus"));
-                if (click) {
-                    elem.click();
-                } else {
+                    elem.dispatchEvent(new Event("focus"));
+                    if (!elem.isConnected) {
+                        continue;
+                    }
+                    if (click) {
+                        if (!elem.matches(":disabled")) {
+                            elem.click();
+                            performed++;
+                        }
+                        continue;
+                    }
+                    const previous = elem.value;
                     elem.value = value;
+                    if (elem.value === previous) {
+                        continue;
+                    }
+                    performed++;
                     if (sms) {
                         elem.dispatchEvent(new Event("input"));
                         elem.dispatchEvent(new Event("change"));
@@ -57,11 +58,11 @@
                         elem.dispatchEvent(new Event("input"));
                     }
                 }
+            } catch (error) {
+                ruleSet.stopped = true;
+                console.warn("SSO autofill rule failed", error);
             }
         }
-
-        if (!budget.exhausted && ruleSets.some((ruleSet) => !ruleSet.stopped)) {
-            setTimeout(() => autoFill(budget), 1000);
-        }
-    }
+        return {performed, overflow: false};
+    };
 })();

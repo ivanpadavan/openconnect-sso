@@ -9,19 +9,9 @@ import attr
 import pkg_resources
 import structlog
 
-from PyQt6.QtCore import (
-    QFile,
-    QIODevice,
-    QObject,
-    QUrl,
-    QTimer,
-    pyqtProperty,
-    pyqtSignal,
-    pyqtSlot,
-    Qt,
-)
+from PyQt6 import sip
+from PyQt6.QtCore import QObject, QUrl, QTimer, pyqtSignal, pyqtSlot, Qt
 from PyQt6.QtNetwork import QNetworkCookie, QNetworkProxy
-from PyQt6.QtWebChannel import QWebChannel
 from PyQt6.QtWebEngineCore import QWebEngineScript, QWebEngineProfile, QWebEnginePage
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWidgets import QApplication, QWidget, QSizePolicy, QVBoxLayout
@@ -44,6 +34,11 @@ class Url:
 class PageHtml:
     url = attr.ib()
     html = attr.ib()
+
+
+@attr.s
+class AutoFillLimitExceeded:
+    limit = attr.ib()
 
 
 @attr.s
@@ -171,30 +166,6 @@ class SmsBridge(QObject):
     error_received = pyqtSignal(str)
 
 
-class AutoFillBudget(QObject):
-    exhausted_changed = pyqtSignal()
-
-    def __init__(self, limit, parent):
-        super().__init__(parent)
-        self._limit = limit
-        self._remaining = limit
-
-    @pyqtProperty(bool, notify=exhausted_changed)
-    def exhausted(self):
-        return self._remaining == 0
-
-    @pyqtSlot(result=bool)
-    def reserve(self):
-        if self.exhausted:
-            return False
-
-        self._remaining -= 1
-        if self.exhausted:
-            logger.info("SSO autofill action limit reached", max_auto_actions=self._limit)
-            self.exhausted_changed.emit()
-        return True
-
-
 class WebBrowser(QWebEngineView):
     def __init__(
         self, auto_fill_rules, sms_config, on_update, *, max_auto_actions=7, debug_html=False
@@ -203,11 +174,13 @@ class WebBrowser(QWebEngineView):
         self._on_update = on_update
         self._auto_fill_rules = auto_fill_rules
         self._debug_html = debug_html
-        self._autofill_enabled = max_auto_actions > 0
+        self._max_auto_actions = max_auto_actions
+        self._auto_actions = 0
+        self._autofill_running = False
+        self._autofill_timer = QTimer(self)
+        self._autofill_timer.setSingleShot(True)
+        self._autofill_timer.timeout.connect(self._run_autofill)
         self._popup_windows = set()
-        self._budget = AutoFillBudget(max_auto_actions, self)
-        self._channel = QWebChannel(self)
-        self._channel.registerObject("budget", self._budget)
         self._sms_config = sms_config
         self._sms_code = None
         self._sms_watcher = None
@@ -219,7 +192,6 @@ class WebBrowser(QWebEngineView):
         self._setup_view(self, is_main=True)
 
     def _setup_view(self, view, *, is_main=False):
-        view.page().setWebChannel(self._channel, APPLICATION_WORLD)
         view.loadFinished.connect(
             lambda success: self._on_load_finished(view.page(), success, is_main)
         )
@@ -236,7 +208,7 @@ class WebBrowser(QWebEngineView):
 
     def authenticate_at(self, url, credentials):
         sms_selectors = get_sms_selectors(self._auto_fill_rules)
-        if self._autofill_enabled and sms_selectors:
+        if self._max_auto_actions and sms_selectors:
             if not self._sms_config:
                 raise ValueError(
                     'fill = "sms" requires an [sms] config section with chat_id and regex'
@@ -244,23 +216,20 @@ class WebBrowser(QWebEngineView):
             self._sms_config.validate()
             self._start_sms_watcher()
 
-        if self._autofill_enabled and credentials:
+        if self._max_auto_actions and credentials and self._auto_fill_rules:
             self._install_autofill_scripts(credentials)
+            self._autofill_running = True
+            self._autofill_timer.start(0)
 
         self.load(QUrl(url))
 
     def _install_autofill_scripts(self, credentials):
         logger.info("Initiating autologin", cred=credentials)
-        channel_source = QFile(":/qtwebchannel/qwebchannel.js")
-        if not channel_source.open(QIODevice.OpenModeFlag.ReadOnly):
-            raise RuntimeError("Unable to load Qt WebChannel JavaScript")
         script = QWebEngineScript()
         script.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentCreation)
         script.setWorldId(APPLICATION_WORLD)
         script.setSourceCode(
-            bytes(channel_source.readAll()).decode()
-            + "\n"
-            + pkg_resources.resource_string(__name__, "user.js").decode()
+            pkg_resources.resource_string(__name__, "user.js").decode()
         )
         self.page().scripts().insert(script)
 
@@ -278,6 +247,40 @@ window.__openconnect_sso_register_rules({json.dumps(get_autofill_rules(rules, cr
 """
             )
             self.page().scripts().insert(script)
+
+    def _run_autofill(self):
+        views = iter([self, *(popup.view() for popup in self._popup_windows)])
+        self._autofill_next_view(views)
+
+    def _autofill_next_view(self, views):
+        if not self._autofill_running:
+            return
+
+        view = next((view for view in views if not sip.isdeleted(view)), None)
+        if view is None:
+            self._autofill_timer.start(1000)
+            return
+
+        remaining = self._max_auto_actions - self._auto_actions
+
+        # Keep one request in flight for the whole browser so each page sees the
+        # remaining budget after the previous page's actions have run.
+        view.page().runJavaScript(
+            f"window.__openconnect_sso_autofill?.({remaining})",
+            APPLICATION_WORLD,
+            lambda result: self._autofill_finished(views, result),
+        )
+
+    def _autofill_finished(self, views, result):
+        if not self._autofill_running:
+            return
+        if result is not None:
+            self._auto_actions += result["performed"]
+            if result["overflow"]:
+                self._autofill_running = False
+                self._on_update(AutoFillLimitExceeded(self._max_auto_actions))
+                return
+        self._autofill_next_view(views)
 
     def _start_sms_watcher(self):
         if self._sms_watcher:
@@ -299,6 +302,8 @@ window.__openconnect_sso_register_rules({json.dumps(get_autofill_rules(rules, cr
         logger.error("SMS autofill error", message=message)
 
     def close(self):
+        self._autofill_running = False
+        self._autofill_timer.stop()
         if self._sms_watcher:
             self._sms_watcher.stop()
             self._sms_watcher = None

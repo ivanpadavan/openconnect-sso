@@ -15,7 +15,7 @@ from prompt_toolkit.shortcuts import radiolist_dialog
 
 from openconnect_sso import config
 from openconnect_sso.authenticator import Authenticator, AuthResponseError
-from openconnect_sso.browser import Terminated
+from openconnect_sso.browser import AutoFillLimitExceeded, Terminated
 from openconnect_sso.config import Credentials
 from openconnect_sso.profile import get_profiles
 
@@ -42,6 +42,9 @@ def run(args):
         msg, retval = e.args
         logger.error(msg)
         return retval
+    except AutoFillLimitExceeded as exc:
+        logger.error("SSO autofill action limit exceeded", max_auto_actions=exc.limit)
+        return 22
     except Terminated:
         logger.warn("Browser window terminated, exiting")
         return 2
