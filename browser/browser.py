@@ -9,19 +9,23 @@ logger = structlog.get_logger()
 
 
 class Browser:
-    def __init__(self, proxy=None, display_mode=DisplayMode.SHOWN):
+    def __init__(self, proxy=None, display_mode=DisplayMode.SHOWN, *, debug_html=False):
         self.browser_proc = None
         self.updater = None
         self.running = False
         self._urls = asyncio.Queue()
         self.url = None
+        self.actions_completed = 0
         self.cookies = {}
         self.loop = asyncio.get_event_loop()
         self.proxy = proxy
         self.display_mode = display_mode
+        self.debug_html = debug_html
 
     async def spawn(self):
-        self.browser_proc = web.Process(self.proxy, self.display_mode)
+        self.browser_proc = web.Process(
+            self.proxy, self.display_mode, debug_html=self.debug_html
+        )
         self.browser_proc.start()
         self.running = True
 
@@ -46,10 +50,18 @@ class Browser:
                     logger.info("Browser exited")
                 await self._urls.put(None)
                 return
+
+            if isinstance(state, web.PageHtml):
+                logger.info("SSO page HTML", url=state.url, html=state.html)
+                continue
+
             logger.debug("Message received from browser", message=state)
 
             if isinstance(state, web.Url):
-                await self._urls.put(state.url)
+                await self._urls.put(state)
+            elif isinstance(state, web.AutoFillLimitExceeded):
+                await self._urls.put(state)
+                return
             elif isinstance(state, web.SetCookie):
                 self.cookies[state.name] = state.value
             else:
@@ -61,9 +73,12 @@ class Browser:
 
     async def page_loaded(self):
         rv = await self._urls.get()
+        if isinstance(rv, web.AutoFillLimitExceeded):
+            raise AutoFillLimitExceeded(rv.limit)
         if not self.running:
             raise Terminated()
-        self.url = rv
+        self.url = rv.url
+        self.actions_completed = rv.actions_completed
 
     async def __aenter__(self):
         await self.spawn()
@@ -82,3 +97,9 @@ class Browser:
 
 class Terminated(Exception):
     pass
+
+
+class AutoFillLimitExceeded(Exception):
+    def __init__(self, limit):
+        super().__init__(limit)
+        self.limit = limit

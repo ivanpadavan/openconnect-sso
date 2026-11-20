@@ -15,7 +15,7 @@ from prompt_toolkit.shortcuts import radiolist_dialog
 
 from openconnect_sso import config
 from openconnect_sso.authenticator import Authenticator, AuthResponseError
-from openconnect_sso.browser import Terminated
+from openconnect_sso.browser import AutoFillLimitExceeded, Terminated
 from openconnect_sso.config import Credentials
 from openconnect_sso.profile import get_profiles
 
@@ -42,6 +42,9 @@ def run(args):
         msg, retval = e.args
         logger.error(msg)
         return retval
+    except AutoFillLimitExceeded as exc:
+        logger.error("SSO autofill action limit exceeded", max_auto_actions=exc.limit)
+        return 22
     except Terminated:
         logger.warn("Browser window terminated, exiting")
         return 2
@@ -69,21 +72,24 @@ def run(args):
             print(
                 "\n".join(f"{k.upper()}={shlex.quote(v)}" for k, v in details.items())
             )
-        return 0
+        status = 0
+    else:
+        try:
+            status = run_openconnect(
+                auth_response,
+                selected_profile,
+                args.proxy,
+                args.ac_version,
+                args.openconnect_args,
+            )
+        except KeyboardInterrupt:
+            logger.warn("CTRL-C pressed, exiting")
+            status = 0
+        finally:
+            handle_disconnect(cfg.on_disconnect)
 
-    try:
-        return run_openconnect(
-            auth_response,
-            selected_profile,
-            args.proxy,
-            args.ac_version,
-            args.openconnect_args,
-        )
-    except KeyboardInterrupt:
-        logger.warn("CTRL-C pressed, exiting")
-        return 0
-    finally:
-        handle_disconnect(cfg.on_disconnect)
+    logger.info("SSO autofill summary", actions_completed=auth_response.actions_completed)
+    return status
 
 
 def configure_logger(logger, level):
@@ -108,7 +114,8 @@ def configure_logger(logger, level):
 
 
 async def _run(args, cfg):
-    if cfg.uses_sms_fill:
+    autofill_enabled = cfg.max_auto_actions != 0
+    if autofill_enabled and cfg.uses_sms_fill:
         if not cfg.sms:
             raise ValueError(
                 'fill = "sms" requires an [sms] config section with chat_id and regex',
@@ -125,11 +132,16 @@ async def _run(args, cfg):
     elif args.user:
         credentials = Credentials(args.user)
 
-    if credentials and not credentials.password:
+    if autofill_enabled and credentials and not credentials.password:
         credentials.password = getpass.getpass(prompt=f"Password ({args.user}): ")
         cfg.credentials = credentials
 
-    if credentials and cfg.uses_fill("totp") and not credentials.totp:
+    if (
+        autofill_enabled
+        and credentials
+        and cfg.uses_fill("totp")
+        and not credentials.totp
+    ):
         credentials.totp = getpass.getpass(
             prompt=f"TOTP secret (leave blank if not required) ({args.user}): "
         )
@@ -161,7 +173,12 @@ async def _run(args, cfg):
     display_mode = config.DisplayMode[args.browser_display_mode.upper()]
 
     auth_response = await authenticate_to(
-        selected_profile, args.proxy, credentials, display_mode, args.ac_version
+        selected_profile,
+        args.proxy,
+        credentials,
+        display_mode,
+        args.ac_version,
+        debug_html=args.debug_html,
     )
 
     if args.on_disconnect and not cfg.on_disconnect:
@@ -189,9 +206,11 @@ async def select_profile(profile_list):
     return selection
 
 
-def authenticate_to(host, proxy, credentials, display_mode, version):
+def authenticate_to(host, proxy, credentials, display_mode, version, *, debug_html=False):
     logger.info("Authenticating to VPN endpoint", name=host.name, address=host.address)
-    return Authenticator(host, proxy, credentials, version).authenticate(display_mode)
+    return Authenticator(host, proxy, credentials, version).authenticate(
+        display_mode, debug_html=debug_html
+    )
 
 
 def run_openconnect(auth_info, host, proxy, version, args):
