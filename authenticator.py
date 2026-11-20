@@ -3,7 +3,7 @@ import requests
 import structlog
 from lxml import etree, objectify
 
-from openconnect_sso.saml_authenticator import authenticate_in_browser
+from openconnect_sso.saml_authenticator import authenticate_in_browser_with_action_count
 
 
 logger = structlog.get_logger()
@@ -38,7 +38,7 @@ class Authenticator:
 
         auth_request_response = response
 
-        sso_token = await self._authenticate_in_browser(
+        sso_token, actions_completed = await self._authenticate_in_browser(
             auth_request_response, display_mode, debug_html=debug_html
         )
 
@@ -50,6 +50,7 @@ class Authenticator:
             )
             raise AuthenticationError(response)
 
+        response.actions_completed = actions_completed
         return response
 
     def _detect_authentication_target_url(self):
@@ -70,7 +71,7 @@ class Authenticator:
     async def _authenticate_in_browser(
         self, auth_request_response, display_mode, *, debug_html=False
     ):
-        return await authenticate_in_browser(
+        return await authenticate_in_browser_with_action_count(
             self.proxy,
             auth_request_response,
             self.credentials,
@@ -205,6 +206,7 @@ class AuthCompleteResponse:
     auth_message = attr.ib(converter=str)
     session_token = attr.ib(converter=str)
     server_cert_hash = attr.ib(converter=str)
+    actions_completed = attr.ib(default=0)
 
 
 def _create_auth_finish_request(host, auth_info, sso_token, version):

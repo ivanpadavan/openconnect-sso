@@ -72,21 +72,24 @@ def run(args):
             print(
                 "\n".join(f"{k.upper()}={shlex.quote(v)}" for k, v in details.items())
             )
-        return 0
+        status = 0
+    else:
+        try:
+            status = run_openconnect(
+                auth_response,
+                selected_profile,
+                args.proxy,
+                args.ac_version,
+                args.openconnect_args,
+            )
+        except KeyboardInterrupt:
+            logger.warn("CTRL-C pressed, exiting")
+            status = 0
+        finally:
+            handle_disconnect(cfg.on_disconnect)
 
-    try:
-        return run_openconnect(
-            auth_response,
-            selected_profile,
-            args.proxy,
-            args.ac_version,
-            args.openconnect_args,
-        )
-    except KeyboardInterrupt:
-        logger.warn("CTRL-C pressed, exiting")
-        return 0
-    finally:
-        handle_disconnect(cfg.on_disconnect)
+    logger.info("SSO autofill summary", actions_completed=auth_response.actions_completed)
+    return status
 
 
 def configure_logger(logger, level):

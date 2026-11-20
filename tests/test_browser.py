@@ -79,7 +79,7 @@ class BrowserTest(unittest.TestCase):
 
         browser = self.make_browser(limit=3, debug_html=True)
         browser.authenticate_at(start, Credentials("alice"))
-        self.wait_until(lambda: Url(stage.toString()) in self.updates)
+        self.wait_until(lambda: Url(stage.toString(), actions_completed=1) in self.updates)
 
         popup = browser.createWindow(QWebEnginePage.WebWindowType.WebDialog)
         popup.setUrl(dialog)

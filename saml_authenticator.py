@@ -8,6 +8,15 @@ log = structlog.get_logger()
 async def authenticate_in_browser(
     proxy, auth_info, credentials, display_mode, *, debug_html=False
 ):
+    token, _ = await authenticate_in_browser_with_action_count(
+        proxy, auth_info, credentials, display_mode, debug_html=debug_html
+    )
+    return token
+
+
+async def authenticate_in_browser_with_action_count(
+    proxy, auth_info, credentials, display_mode, *, debug_html=False
+):
     async with Browser(proxy, display_mode, debug_html=debug_html) as browser:
         await browser.authenticate_at(auth_info.login_url, credentials)
 
@@ -15,4 +24,4 @@ async def authenticate_in_browser(
             await browser.page_loaded()
             log.debug("Browser loaded page", url=browser.url)
 
-    return browser.cookies[auth_info.token_cookie_name]
+    return browser.cookies[auth_info.token_cookie_name], browser.actions_completed

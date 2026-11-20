@@ -15,6 +15,7 @@ class Browser:
         self.running = False
         self._urls = asyncio.Queue()
         self.url = None
+        self.actions_completed = 0
         self.cookies = {}
         self.loop = asyncio.get_event_loop()
         self.proxy = proxy
@@ -57,7 +58,7 @@ class Browser:
             logger.debug("Message received from browser", message=state)
 
             if isinstance(state, web.Url):
-                await self._urls.put(state.url)
+                await self._urls.put(state)
             elif isinstance(state, web.AutoFillLimitExceeded):
                 await self._urls.put(state)
                 return
@@ -76,7 +77,8 @@ class Browser:
             raise AutoFillLimitExceeded(rv.limit)
         if not self.running:
             raise Terminated()
-        self.url = rv
+        self.url = rv.url
+        self.actions_completed = rv.actions_completed
 
     async def __aenter__(self):
         await self.spawn()

@@ -28,6 +28,7 @@ APPLICATION_WORLD = QWebEngineScript.ScriptWorldId.ApplicationWorld
 @attr.s
 class Url:
     url = attr.ib()
+    actions_completed = attr.ib(default=0)
 
 
 @attr.s
@@ -177,6 +178,8 @@ class WebBrowser(QWebEngineView):
         self._max_auto_actions = max_auto_actions
         self._auto_actions = 0
         self._autofill_running = False
+        self._autofill_in_flight = False
+        self._pending_urls = []
         self._autofill_timer = QTimer(self)
         self._autofill_timer.setSingleShot(True)
         self._autofill_timer.timeout.connect(self._run_autofill)
@@ -265,6 +268,7 @@ window.__openconnect_sso_register_rules({json.dumps(get_autofill_rules(rules, cr
 
         # Keep one request in flight for the whole browser so each page sees the
         # remaining budget after the previous page's actions have run.
+        self._autofill_in_flight = True
         view.page().runJavaScript(
             f"window.__openconnect_sso_autofill?.({remaining})",
             APPLICATION_WORLD,
@@ -272,6 +276,7 @@ window.__openconnect_sso_register_rules({json.dumps(get_autofill_rules(rules, cr
         )
 
     def _autofill_finished(self, views, result):
+        self._autofill_in_flight = False
         if not self._autofill_running:
             return
         if result is not None:
@@ -280,6 +285,9 @@ window.__openconnect_sso_register_rules({json.dumps(get_autofill_rules(rules, cr
                 self._autofill_running = False
                 self._on_update(AutoFillLimitExceeded(self._max_auto_actions))
                 return
+        for url in self._pending_urls:
+            self._on_update(Url(url, self._auto_actions))
+        self._pending_urls.clear()
         self._autofill_next_view(views)
 
     def _start_sms_watcher(self):
@@ -338,7 +346,11 @@ window.__openconnect_sso_register_rules({json.dumps(get_autofill_rules(rules, cr
         if html:
             self._on_update(PageHtml(url, html))
         if is_main:
-            self._on_update(Url(url))
+            # A click can load the final page before its JavaScript result arrives.
+            if self._autofill_in_flight:
+                self._pending_urls.append(url)
+            else:
+                self._on_update(Url(url, self._auto_actions))
 
 
 class WebPopupWindow(QWidget):
