@@ -28,7 +28,7 @@
                     if (click ? elem.matches(":disabled") : !value || elem.value === value) {
                         continue;
                     }
-                    if (performed === remaining) {
+                    if (remaining !== null && performed === remaining) {
                         return {performed, overflow: true};
                     }
 

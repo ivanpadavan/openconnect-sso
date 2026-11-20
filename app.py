@@ -114,7 +114,8 @@ def configure_logger(logger, level):
 
 
 async def _run(args, cfg):
-    if cfg.max_auto_actions and cfg.uses_sms_fill:
+    autofill_enabled = cfg.max_auto_actions != 0
+    if autofill_enabled and cfg.uses_sms_fill:
         if not cfg.sms:
             raise ValueError(
                 'fill = "sms" requires an [sms] config section with chat_id and regex',
@@ -131,12 +132,12 @@ async def _run(args, cfg):
     elif args.user:
         credentials = Credentials(args.user)
 
-    if cfg.max_auto_actions and credentials and not credentials.password:
+    if autofill_enabled and credentials and not credentials.password:
         credentials.password = getpass.getpass(prompt=f"Password ({args.user}): ")
         cfg.credentials = credentials
 
     if (
-        cfg.max_auto_actions
+        autofill_enabled
         and credentials
         and cfg.uses_fill("totp")
         and not credentials.totp

@@ -15,12 +15,12 @@ Replace `main` with a branch, tag, or commit hash to select a version. From a lo
 
 ## SSO browser
 
-Set the action limit at the top level of `~/.config/openconnect-sso/config.toml`, before any named sections.
+Automatic actions are unlimited by default. To set a limit, add `max_auto_actions` at the top level of `~/.config/openconnect-sso/config.toml`, before any named sections.
 
 ```toml
 max_auto_actions = 7
 ```
 
-The default is seven completed autofill changes or clicks per login attempt. Page loads and opening popups use none of that budget. If another automatic action would exceed the limit, the program reports an error and exits with status `22`. Set the limit to `0` to disable automatic actions. After a successful sign-in, the CLI logs the final action count once before exiting.
+The counter tracks completed autofill changes and clicks per login attempt. If another automatic action would exceed a configured limit, the program reports an error and exits with status `22`. Set the limit to `0` to disable automatic actions. After a successful sign-in, the CLI logs the final action count once before exiting.
 
 Pass `--debug-html` to write the full HTML of each successfully loaded SSO page to the application log. The output can contain sensitive data.

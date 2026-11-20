@@ -169,7 +169,7 @@ class SmsBridge(QObject):
 
 class WebBrowser(QWebEngineView):
     def __init__(
-        self, auto_fill_rules, sms_config, on_update, *, max_auto_actions=7, debug_html=False
+        self, auto_fill_rules, sms_config, on_update, *, max_auto_actions=None, debug_html=False
     ):
         super().__init__()
         self._on_update = on_update
@@ -210,8 +210,9 @@ class WebBrowser(QWebEngineView):
             return view
 
     def authenticate_at(self, url, credentials):
+        autofill_enabled = self._max_auto_actions != 0
         sms_selectors = get_sms_selectors(self._auto_fill_rules)
-        if self._max_auto_actions and sms_selectors:
+        if autofill_enabled and sms_selectors:
             if not self._sms_config:
                 raise ValueError(
                     'fill = "sms" requires an [sms] config section with chat_id and regex'
@@ -219,7 +220,7 @@ class WebBrowser(QWebEngineView):
             self._sms_config.validate()
             self._start_sms_watcher()
 
-        if self._max_auto_actions and credentials and self._auto_fill_rules:
+        if autofill_enabled and credentials and self._auto_fill_rules:
             self._install_autofill_scripts(credentials)
             self._autofill_running = True
             self._autofill_timer.start(0)
@@ -264,13 +265,15 @@ window.__openconnect_sso_register_rules({json.dumps(get_autofill_rules(rules, cr
             self._autofill_timer.start(1000)
             return
 
-        remaining = self._max_auto_actions - self._auto_actions
+        remaining = self._max_auto_actions
+        if remaining is not None:
+            remaining -= self._auto_actions
 
         # Keep one request in flight for the whole browser so each page sees the
         # remaining budget after the previous page's actions have run.
         self._autofill_in_flight = True
         view.page().runJavaScript(
-            f"window.__openconnect_sso_autofill?.({remaining})",
+            f"window.__openconnect_sso_autofill?.({json.dumps(remaining)})",
             APPLICATION_WORLD,
             lambda result: self._autofill_finished(views, result),
         )

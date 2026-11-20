@@ -3,6 +3,8 @@ import time
 import unittest
 from pathlib import Path
 
+import toml
+
 from PyQt6.QtCore import QUrl
 from PyQt6.QtTest import QTest
 from PyQt6.QtWebEngineCore import QWebEnginePage
@@ -111,10 +113,29 @@ class BrowserTest(unittest.TestCase):
         self.assertEqual(self.js(browser, "document.querySelector('#username').value"), "")
         self.assertFalse(any(isinstance(msg, PageHtml) for msg in self.updates))
 
+    def test_default_allows_more_than_seven_actions(self):
+        final = self.make_page("final", "<p>Signed in</p>")
+        start = self.make_page(
+            "start",
+            '<button id="next" data-clicks="0" '
+            'onclick="if (++this.dataset.clicks === 8) location.href=\'final.html\'">'
+            "Next</button>",
+        )
+        rules = {"file://*": [AutoFillRule(selector="#next", action="click")] * 8}
+        browser = WebBrowser(rules, None, self.updates.append)
+        self.addCleanup(browser.close)
+        browser.show()
+        browser.authenticate_at(start, Credentials("alice"))
+
+        self.wait_until(lambda: Url(final.toString(), actions_completed=8) in self.updates)
+        self.assertFalse(any(isinstance(msg, AutoFillLimitExceeded) for msg in self.updates))
+
 
 class ConfigTest(unittest.TestCase):
     def test_max_auto_actions(self):
-        self.assertEqual(Config.from_dict({}).max_auto_actions, 7)
+        defaults = Config.from_dict({})
+        self.assertIsNone(defaults.max_auto_actions)
+        self.assertNotIn("max_auto_actions", toml.loads(toml.dumps(defaults.as_dict())))
         config = Config.from_dict({"max_auto_actions": 3})
         self.assertEqual(config.as_dict()["max_auto_actions"], 3)
         for value in (-1, False, 2.5, "7"):
