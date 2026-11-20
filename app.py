@@ -108,7 +108,7 @@ def configure_logger(logger, level):
 
 
 async def _run(args, cfg):
-    if cfg.uses_sms_fill:
+    if cfg.max_auto_actions and cfg.uses_sms_fill:
         if not cfg.sms:
             raise ValueError(
                 'fill = "sms" requires an [sms] config section with chat_id and regex',
@@ -125,11 +125,16 @@ async def _run(args, cfg):
     elif args.user:
         credentials = Credentials(args.user)
 
-    if credentials and not credentials.password:
+    if cfg.max_auto_actions and credentials and not credentials.password:
         credentials.password = getpass.getpass(prompt=f"Password ({args.user}): ")
         cfg.credentials = credentials
 
-    if credentials and cfg.uses_fill("totp") and not credentials.totp:
+    if (
+        cfg.max_auto_actions
+        and credentials
+        and cfg.uses_fill("totp")
+        and not credentials.totp
+    ):
         credentials.totp = getpass.getpass(
             prompt=f"TOTP secret (leave blank if not required) ({args.user}): "
         )
@@ -161,7 +166,12 @@ async def _run(args, cfg):
     display_mode = config.DisplayMode[args.browser_display_mode.upper()]
 
     auth_response = await authenticate_to(
-        selected_profile, args.proxy, credentials, display_mode, args.ac_version
+        selected_profile,
+        args.proxy,
+        credentials,
+        display_mode,
+        args.ac_version,
+        debug_html=args.debug_html,
     )
 
     if args.on_disconnect and not cfg.on_disconnect:
@@ -189,9 +199,11 @@ async def select_profile(profile_list):
     return selection
 
 
-def authenticate_to(host, proxy, credentials, display_mode, version):
+def authenticate_to(host, proxy, credentials, display_mode, version, *, debug_html=False):
     logger.info("Authenticating to VPN endpoint", name=host.name, address=host.address)
-    return Authenticator(host, proxy, credentials, version).authenticate(display_mode)
+    return Authenticator(host, proxy, credentials, version).authenticate(
+        display_mode, debug_html=debug_html
+    )
 
 
 def run_openconnect(auth_info, host, proxy, version, args):

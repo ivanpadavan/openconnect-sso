@@ -9,7 +9,7 @@ logger = structlog.get_logger()
 
 
 class Browser:
-    def __init__(self, proxy=None, display_mode=DisplayMode.SHOWN):
+    def __init__(self, proxy=None, display_mode=DisplayMode.SHOWN, *, debug_html=False):
         self.browser_proc = None
         self.updater = None
         self.running = False
@@ -19,9 +19,12 @@ class Browser:
         self.loop = asyncio.get_event_loop()
         self.proxy = proxy
         self.display_mode = display_mode
+        self.debug_html = debug_html
 
     async def spawn(self):
-        self.browser_proc = web.Process(self.proxy, self.display_mode)
+        self.browser_proc = web.Process(
+            self.proxy, self.display_mode, debug_html=self.debug_html
+        )
         self.browser_proc.start()
         self.running = True
 
@@ -46,6 +49,11 @@ class Browser:
                     logger.info("Browser exited")
                 await self._urls.put(None)
                 return
+
+            if isinstance(state, web.PageHtml):
+                logger.info("SSO page HTML", url=state.url, html=state.html)
+                continue
+
             logger.debug("Message received from browser", message=state)
 
             if isinstance(state, web.Url):

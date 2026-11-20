@@ -12,3 +12,15 @@ openconnect-sso --help
 ```
 
 Replace `main` with a branch, tag, or commit hash to select a version. From a local checkout, use `python -m pip install .`.
+
+## SSO browser
+
+Set the action limit at the top level of `~/.config/openconnect-sso/config.toml`, before any named sections.
+
+```toml
+max_auto_actions = 7
+```
+
+The default is seven autofill changes or clicks per login attempt across all pages and popups. When the browser reaches the limit, you can finish signing in manually. Set the limit to `0` to disable automatic actions.
+
+Pass `--debug-html` to write the full HTML of each successfully loaded SSO page to the application log. The output can contain sensitive data.

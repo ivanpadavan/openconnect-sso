@@ -17,7 +17,7 @@ class Authenticator:
         self.version = version
         self.session = create_http_session(proxy, version)
 
-    async def authenticate(self, display_mode):
+    async def authenticate(self, display_mode, *, debug_html=False):
         self._detect_authentication_target_url()
 
         response = self._start_authentication()
@@ -39,7 +39,7 @@ class Authenticator:
         auth_request_response = response
 
         sso_token = await self._authenticate_in_browser(
-            auth_request_response, display_mode
+            auth_request_response, display_mode, debug_html=debug_html
         )
 
         response = self._complete_authentication(auth_request_response, sso_token)
@@ -67,9 +67,15 @@ class Authenticator:
         logger.debug("Auth init response received", content=response.content)
         return parse_response(response)
 
-    async def _authenticate_in_browser(self, auth_request_response, display_mode):
+    async def _authenticate_in_browser(
+        self, auth_request_response, display_mode, *, debug_html=False
+    ):
         return await authenticate_in_browser(
-            self.proxy, auth_request_response, self.credentials, display_mode
+            self.proxy,
+            auth_request_response,
+            self.credentials,
+            display_mode,
+            debug_html=debug_html,
         )
 
     def _complete_authentication(self, auth_request_response, sso_token):

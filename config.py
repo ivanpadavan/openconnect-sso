@@ -172,6 +172,12 @@ class Config(ConfigNode):
     )
     sms = attr.ib(default=None, converter=SmsConfig.from_dict)
     on_disconnect = attr.ib(converter=str, default="")
+    max_auto_actions = attr.ib(default=7)
+
+    @max_auto_actions.validator
+    def _validate_max_auto_actions(self, attribute, value):
+        if type(value) is not int or value < 0:
+            raise ValueError("max_auto_actions must be a non-negative integer")
 
     @property
     def uses_sms_fill(self):

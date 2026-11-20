@@ -105,6 +105,12 @@ def create_argparser():
     )
 
     parser.add_argument(
+        "--debug-html",
+        action="store_true",
+        help="Log full HTML after each SSO page loads (may contain sensitive data)",
+    )
+
+    parser.add_argument(
         "openconnect_args",
         help="Arguments passed to openconnect",
         action=StoreOpenConnectArgs,
